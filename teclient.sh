@@ -12,6 +12,21 @@ function usage {
 	echo
 }
 
+function get_response {
+	(
+		cat 0<&3 | (
+			read LINE;
+			if [ "$LINE" != "Continue" ]; then
+				echo "Not a TE server?" 1>&2
+				exit
+			fi
+			head -1 1>&2
+			cat
+		) &
+		cat 1>&3
+	) 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
+}
+
 function te_convert {
 	if [ -z "$1" ]; then
 		usage
@@ -28,14 +43,11 @@ function te_convert {
 	if [ -n "$3" ]; then
 		MIME=$3
 	fi
-	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
 	(
 	echo "CONVERT"
 	echo "name=\"$CONVERT_TO\" fkey=\"$FKEY\" size=\"$SIZE\" fname=\"$FNAME\" mime=\"$MIME\""
 	cat "$FILE"
-	) >&3
-	cat <&3
-	echo
+	) | get_response
 }
 
 function te_info {
@@ -44,13 +56,10 @@ function te_info {
 		exit 1
 	fi
 	ID=$1
-	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
 	(
 	echo "INFO"
 	echo "  id=\"$ID\""
-	) >&3
-	cat <&3
-	echo
+	) | get_response
 }
 
 function te_abort {
@@ -59,13 +68,10 @@ function te_abort {
 		exit 1
 	fi
 	ID=$1
-	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
 	(
 	echo "ABORT"
 	echo "  id=\"$ID\""
-	) >&3
-	cat <&3
-	echo
+	) | get_response
 }
 
 function te_get {
@@ -74,22 +80,16 @@ function te_get {
 		exit 1
 	fi
 	ID=$1
-	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
 	(
 	echo "GET"
 	echo "  id=\"$ID\""
-	) >&3
-	cat <&3
-	echo
+	) | get_response
 }
 
 function te_status {
-	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
 	(
 	echo "STATUS"
-	) >&3
-	cat <&3
-	echo
+	) | get_response
 }
 
 if [ -z "$TE_HOST" -o -z "$TE_PORT" ]; then
