@@ -12,21 +12,6 @@ function usage {
 	echo
 }
 
-function get_response {
-	(
-		cat 0<&3 | (
-			read LINE;
-			if [ "$LINE" != "Continue" ]; then
-				echo "Not a TE server?" 1>&2
-				exit
-			fi
-			head -1 1>&2
-			cat
-		) &
-		cat 1>&3
-	) 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
-}
-
 function te_convert {
 	if [ -z "$1" ]; then
 		usage
@@ -43,11 +28,30 @@ function te_convert {
 	if [ -n "$3" ]; then
 		MIME=$3
 	fi
-	(
-	echo "CONVERT"
-	echo "name=\"$CONVERT_TO\" fkey=\"$FKEY\" size=\"$SIZE\" fname=\"$FNAME\" mime=\"$MIME\""
-	cat "$FILE"
-	) | get_response
+
+	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
+
+	read LINE 0<&3
+	if [ "$LINE" != "Continue" ]; then
+		echo "Not a TE server?" 1>&2
+		exit 10
+	fi
+	echo "CONVERT" 1>&3
+	echo "name=\"$CONVERT_TO\" fkey=\"$FKEY\" size=\"$SIZE\" fname=\"$FNAME\" mime=\"$MIME\"" 1>&3
+	cat "$FILE" 1>&3
+	RESPONSE=$(head -1 0<&3)
+	if [ "${RESPONSE:0:22}" != "<response status=\"OK\">" ]; then
+		echo "Error response [[[$RESPONSE]]]" 1>&2
+		exit 11
+	fi
+	TID=$(sed -n -e 's:.*<task[^>][^>]*id="\([0-9][0-9]*\)".*:\1:p' <<EOF
+$RESPONSE
+EOF)
+	if [ -z "$TID" ]; then
+		echo "Could not get tid from response [[[$RESPONSE]]]" 1>&2
+		exit 12
+	fi
+	echo "$TID"
 }
 
 function te_info {
@@ -56,10 +60,18 @@ function te_info {
 		exit 1
 	fi
 	ID=$1
-	(
-	echo "INFO"
-	echo "  id=\"$ID\""
-	) | get_response
+
+	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
+
+	read LINE 0<&3
+	if [ "$LINE" != "Continue" ]; then
+		echo "Not a TE server?" 1>&2
+		exit 10
+	fi
+	echo "INFO" 1>&3
+	echo "  id=\"$ID\"" 1>&3
+	RESPONSE=$(head -1 0<&3)
+	echo "$RESPONSE"
 }
 
 function te_abort {
@@ -68,10 +80,21 @@ function te_abort {
 		exit 1
 	fi
 	ID=$1
-	(
-	echo "ABORT"
-	echo "  id=\"$ID\""
-	) | get_response
+
+	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
+
+	read LINE 0<&3
+	if [ "$LINE" != "Continue" ]; then
+		echo "Not a TE server?" 1>&2
+		exit 10
+	fi
+	echo "ABORT" 1>&3
+	echo "  id=\"$ID\"" 1>&3
+	RESPONSE=$(head -1 0<&3)
+	if [ "${RESPONSE:0:22}" != "<response status=\"OK\">" ]; then
+		echo "Error response [[[$RESPONSE]]]" 1>&2
+		exit 11
+	fi
 }
 
 function te_get {
@@ -80,16 +103,29 @@ function te_get {
 		exit 1
 	fi
 	ID=$1
-	(
-	echo "GET"
-	echo "  id=\"$ID\""
-	) | get_response
-}
 
-function te_status {
-	(
-	echo "STATUS"
-	) | get_response
+	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
+
+	read LINE 0<&3
+	if [ "$LINE" != "Continue" ]; then
+		echo "Not a TE server?" 1>&2
+		exit 10
+	fi
+	echo "GET" 1>&3
+	echo "  id=\"$ID\"" 1>&3
+	RESPONSE=$(head -1 0<&3)
+	if [ "${RESPONSE:0:22}" != "<response status=\"OK\">" ]; then
+		echo "Error response [[[$RESPONSE]]]" 1>&2
+		exit 11
+	fi
+	SIZE=$(sed -n -e 's:.*<task[^>][^>]*size="\([0-9][0-9]*\)">.*:\1:p' <<EOF
+$RESPONSE
+EOF)
+	if [ -z "$SIZE" ]; then
+		echo "Could not get size from response [[[$RESPONSE]]]" 1>&2
+		exit 12
+	fi
+	head -c "$SIZE" 0<&3
 }
 
 if [ -z "$TE_HOST" -o -z "$TE_PORT" ]; then
@@ -116,9 +152,6 @@ case $OP in
 		;;
 	get)
 		te_get "$@"
-		;;
-	status)
-		te_status "$@"
 		;;
 	*)
 		usage
