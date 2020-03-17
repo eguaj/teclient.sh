@@ -9,6 +9,7 @@ function usage {
 	echo
 	echo "  $0 convert <file_pathname> [<conversion_name> [<input_file_mime>]]"
 	echo "  $0 info|get|abort <id>"
+	echo "  $0 info:engines"
 	echo "  $0 check"
 	echo
 }
@@ -25,13 +26,17 @@ function te_convert {
 	if [ -n "$2" ]; then
 		CONVERT_TO=$2
 	fi
-	local MIME="text"
-	if [ -n "$3" ]; then
-		MIME=$3
+	local MIME="$3"
+	if [ -z "$MIME" ]; then
+		MIME=$(file -bi "$FILE" | cut -d';' -f1)
+	fi
+	if [ -z "$MIME" ]; then
+		MIME="text"
 	fi
 
 	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
 
+	local LINE
 	read -t 5 LINE 0<&3
 	if [ "$LINE" != "Continue" ]; then
 		echo "Not a TE server?" 1>&2
@@ -40,14 +45,14 @@ function te_convert {
 	echo "CONVERT" 1>&3
 	echo "name=\"$CONVERT_TO\" fkey=\"$FKEY\" size=\"$SIZE\" fname=\"$FNAME\" mime=\"$MIME\"" 1>&3
 	cat "$FILE" 1>&3
-	local RESPONSE=$(head -1 0<&3)
-	if [ "${RESPONSE:0:22}" != "<response status=\"OK\">" ]; then
-		echo "Error response [[[$RESPONSE]]]" 1>&2
+	read -t 5 LINE 0<&3
+	if [ "${LINE:0:22}" != "<response status=\"OK\">" ]; then
+		echo "Error response [[[$LINE]]]" 1>&2
 		exit 11
 	fi
-	local TID=$(echo "$RESPONSE" | sed -n -e 's:.*<task[^>][^>]*id="\([^"][^"]*\)".*:\1:p')
+	local TID=$(echo "$LINE" | sed -n -e 's:.*<task[^>][^>]*id="\([^"][^"]*\)".*:\1:p')
 	if [ -z "$TID" ]; then
-		echo "Could not get tid from response [[[$RESPONSE]]]" 1>&2
+		echo "Could not get tid from response [[[$LINE]]]" 1>&2
 		exit 12
 	fi
 	echo "$TID"
@@ -62,6 +67,7 @@ function te_info {
 
 	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
 
+	local LINE
 	read -t 5 LINE 0<&3
 	if [ "$LINE" != "Continue" ]; then
 		echo "Not a TE server?" 1>&2
@@ -69,8 +75,8 @@ function te_info {
 	fi
 	echo "INFO" 1>&3
 	echo "  id=\"$ID\"" 1>&3
-	local RESPONSE=$(head -1 0<&3)
-	echo "$RESPONSE"
+	read -t 5 LINE 0<&3
+	echo "$LINE"
 }
 
 function te_abort {
@@ -82,6 +88,7 @@ function te_abort {
 
 	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
 
+	local LINE
 	read -t 5 LINE 0<&3
 	if [ "$LINE" != "Continue" ]; then
 		echo "Not a TE server?" 1>&2
@@ -89,9 +96,9 @@ function te_abort {
 	fi
 	echo "ABORT" 1>&3
 	echo "  id=\"$ID\"" 1>&3
-	local RESPONSE=$(head -1 0<&3)
-	if [ "${RESPONSE:0:22}" != "<response status=\"OK\">" ]; then
-		echo "Error response [[[$RESPONSE]]]" 1>&2
+	read -t 5 LINE 0<&3
+	if [ "${LINE:0:22}" != "<response status=\"OK\">" ]; then
+		echo "Error response [[[$LINE]]]" 1>&2
 		exit 11
 	fi
 }
@@ -105,6 +112,7 @@ function te_get {
 
 	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
 
+	local LINE
 	read -t 5 LINE 0<&3
 	if [ "$LINE" != "Continue" ]; then
 		echo "Not a TE server?" 1>&2
@@ -112,21 +120,21 @@ function te_get {
 	fi
 	echo "GET" 1>&3
 	echo "  id=\"$ID\"" 1>&3
-	local RESPONSE=$(head -1 0<&3)
-	if [ "${RESPONSE:0:22}" != "<response status=\"OK\">" ]; then
-		echo "Error response [[[$RESPONSE]]]" 1>&2
+	read -t 5 LINE 0<&3
+	if [ "${LINE:0:22}" != "<response status=\"OK\">" ]; then
+		echo "Error response [[[$LINE]]]" 1>&2
 		exit 11
 	fi
-	local SIZE=$(echo "$RESPONSE" | sed -n -e 's:.*<task[^>][^>]*size="\([0-9][0-9]*\)">.*:\1:p')
+	local SIZE=$(echo "$LINE" | sed -n -e 's:.*<task[^>][^>]*size="\([0-9][0-9]*\)">.*:\1:p')
 	if [ -z "$SIZE" ]; then
-		echo "Could not get size from response [[[$RESPONSE]]]" 1>&2
+		echo "Could not get size from response [[[$LINE]]]" 1>&2
 		exit 12
 	fi
 	head -c "$SIZE" 0<&3
 }
 
 function helloworld_pdf {
-	uudecode -p <<'EOF' | gzip -dc
+	uudecode -o - <<'EOF' | gzip -dc
 begin-base64 644 helloworld.pdf
 H4sIAOvdl1AAA+1W3WoTQRQuXhQZLwUvvJDpRWmDtPOzO/sjpZBmEwy2tiRFK0kutruTZCTdDbtT
 bfsA3nsrvoA3vorQN5DqQ/RC8Gx20w1NURARhIaEzHznnPm+OTOcM8t7XmONrVto+dvFl3PEMMXx
@@ -153,11 +161,12 @@ function te_check {
 	echo "Sending sample PDF to TXT conversion..."
 	local TID=$(te_convert "$FILE" utf8 application/pdf)
 	rm "$FILE"
-	echo "Waiting for 30 seconds..."
-	sleep 30
+	echo "Waiting for 15 seconds..."
+	sleep 15
 	echo "Fetching result..."
-	local RESPONSE=$(te_get "$TID" | tr "\n" "%")
-	if [ "[$RESPONSE]" != "[Hello world.%%]" ]; then
+	te_info "$TID"
+	local RESPONSE=$(te_get "$TID" | tr "\n" "%" | sed -e 's/%//')
+	if [ "[${RESPONSE:0:12}]" != "[Hello world.]" ]; then
 		echo "Unexpected response [[[$RESPONSE]]] for tid '$TID'." 1>&2
 		exit 13
 	fi
@@ -165,6 +174,29 @@ function te_check {
 	echo "Cleanup..."
 	te_abort "$TID"
 	echo "Done."
+}
+
+function te_info_engines {
+	exec 3<> "/dev/tcp/$TE_HOST/$TE_PORT"
+
+	local LINE
+	read -t 5 LINE 0<&3
+	if [ "$LINE" != "Continue" ]; then
+		echo "Not a TE server?" 1>&2
+		exit 10
+	fi
+	echo "INFO:ENGINES" 1>&3
+	read -t 5 LINE 0<&3
+	if [ "${LINE:0:22}" != "<response status=\"OK\" " ]; then
+		echo "Error response [[[$LINE]]]" 1>&2
+		exit 11
+	fi
+	local SIZE=$(echo "$LINE" | sed -n -e 's:.*[[:space:]]size="\([0-9][0-9]*\)".*:\1:p')
+	if [ -z "$SIZE" ]; then
+		echo "Could not get size from response [[[$LINE]]]" 1>&2
+		exit 12
+	fi
+	head -c "$SIZE" 0<&3
 }
 
 if [ -z "$TE_HOST" -o -z "$TE_PORT" ]; then
@@ -194,6 +226,9 @@ case $OP in
 		;;
 	check)
 		te_check "$@"
+		;;
+	info:engines)
+		te_info_engines "$@"
 		;;
 	*)
 		usage
